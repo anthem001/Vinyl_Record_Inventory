@@ -68,6 +68,8 @@ namespace Record_Inventory
             InitializeComponent();
             this.DataContext = this;
 
+            LoadConfiguration(); //loads discogs api token
+
             _httpClient = new HttpClient();
             _httpClient.DefaultRequestHeaders.Add("User-Agent", "VinylSorterApp/1.0 (contact@yourdomain.com)");
             _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Discogs", _discogsToken);
