@@ -40,7 +40,7 @@ In the root directory of your project where the `.sln` solution file resides, cr
     "ApiToken": "YOUR_PERSONAL_ACCESS_TOKEN_HERE"
   }
 }
-
+```
 ### 3. Roadmap
 1. Will publish a version soon for easy download
 2. Add Genre and Style from discogs
