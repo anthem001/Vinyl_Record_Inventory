@@ -4,9 +4,11 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Win32;
 using System;
 using System.Collections.ObjectModel;
+using System.ComponentModel;
 using System.IO;
 using System.Linq;
 using System.Net.Http;
+using System.Runtime.CompilerServices;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
@@ -15,8 +17,6 @@ using System.Windows.Media.Imaging;
 
 namespace Record_Inventory
 {
-    
-
     public class AlbumRecord
     {
         public string Title { get; set; } = "";
@@ -25,30 +25,43 @@ namespace Record_Inventory
         public string Action { get; set; } = "";
     }
 
-    public record DiscogsResult(string Title, string Artist, string Year, double Rating, double MedianPrice, string CoverImageUrl);
+    public record DiscogsResult(string Title, string Artist, string Year, double Rating, double MedianPrice, string CoverImageUrl, string Genre, string Style);
 
-    public partial class MainWindow : Window
+    public partial class MainWindow : Window, INotifyPropertyChanged
     {
         private const string ConnectionString = "Data Source=vinyl_inventory.db";
         private long _currentActiveDatabaseId = -1;
+        private string _discogsToken = "";
 
-        public string CurrentArtist { get; set; } = "Scan an album to begin...";
-        public string CurrentTitle { get; set; } = "---";
-        public string CurrentYear { get; set; } = "---";
-        public double CurrentRating { get; set; } = 0.0;
-        public double CurrentPrice { get; set; } = 0.00;
-        public string SuggestedAction { get; set; } = "AWAITING SCAN";
-        public BitmapImage? CurrentAlbumArt { get; set; }
+        // Core Backing Fields
+        private string _currentArtist = "Scan an album to begin...";
+        private string _currentTitle = "---";
+        private string _currentYear = "---";
+        private string _currentGenre = "---";
+        private string _currentStyle = "---";
+        private double _currentRating = 0.0;
+        private double _currentPrice = 0.00;
+        private string _suggestedAction = "AWAITING SCAN";
+        private BitmapImage? _currentAlbumArt;
+        private Visibility _placeholderVisibility = Visibility.Visible;
 
-        private string _discogsToken;
+        // Thread-Safe Public Properties Bindings
+        public string CurrentArtist { get => _currentArtist; set { _currentArtist = value; OnPropertyChanged(); } }
+        public string CurrentTitle { get => _currentTitle; set { _currentTitle = value; OnPropertyChanged(); } }
+        public string CurrentYear { get => _currentYear; set { _currentYear = value; OnPropertyChanged(); } }
+        public string CurrentGenre { get => _currentGenre; set { _currentGenre = value; OnPropertyChanged(); } }
+        public string CurrentStyle { get => _currentStyle; set { _currentStyle = value; OnPropertyChanged(); } }
+        public double CurrentRating { get => _currentRating; set { _currentRating = value; OnPropertyChanged(); OnPropertyChanged(nameof(RatingDisplayText)); } }
+        public double CurrentPrice { get => _currentPrice; set { _currentPrice = value; OnPropertyChanged(); } }
+        public string SuggestedAction { get => _suggestedAction; set { _suggestedAction = value; OnPropertyChanged(); } }
+        public BitmapImage? CurrentAlbumArt { get => _currentAlbumArt; set { _currentAlbumArt = value; OnPropertyChanged(); } }
+        public Visibility PlaceholderVisibility { get => _placeholderVisibility; set { _placeholderVisibility = value; OnPropertyChanged(); } }
 
-        // Dynamic formatting text property computed directly for your XAML display card
         public string RatingDisplayText
         {
             get
             {
                 if (CurrentRating <= 0.0) return "---";
-
                 string classification;
                 if (CurrentRating >= 4.5) classification = "Masterpiece";
                 else if (CurrentRating >= 4.0) classification = "Great";
@@ -61,22 +74,19 @@ namespace Record_Inventory
         }
 
         public ObservableCollection<AlbumRecord> ScannedHistory { get; } = new();
-        private readonly HttpClient _httpClient;
 
         public MainWindow()
         {
             InitializeComponent();
             this.DataContext = this;
 
-            LoadConfiguration(); //loads discogs api token
-
-            _httpClient = new HttpClient();
-            _httpClient.DefaultRequestHeaders.Add("User-Agent", "VinylSorterApp/1.0 (contact@yourdomain.com)");
-            _httpClient.DefaultRequestHeaders.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Discogs", _discogsToken);
+            // Load appsettings profile securely on boot
+            LoadConfiguration();
 
             InitializeDatabase();
             LoadHistoricalSessionLog();
-            BarcodeTextBox.Focus();
+
+            this.Loaded += (s, e) => FocusInput();
         }
 
         private void InitializeDatabase()
@@ -92,9 +102,18 @@ namespace Record_Inventory
                     Rating REAL,
                     EstimatedPrice REAL,
                     Decision TEXT,
+                    Genre TEXT,
+                    Style TEXT,
                     ScanDate DATETIME DEFAULT CURRENT_TIMESTAMP
                 );";
             connection.Execute(createTableSql);
+
+            try
+            {
+                connection.Execute("ALTER TABLE Inventory ADD COLUMN Genre TEXT;");
+                connection.Execute("ALTER TABLE Inventory ADD COLUMN Style TEXT;");
+            }
+            catch { /* Columns exist safely */ }
         }
 
         private void LoadConfiguration()
@@ -104,15 +123,9 @@ namespace Record_Inventory
                 var config = new ConfigurationBuilder()
                     .SetBasePath(Directory.GetCurrentDirectory())
                     .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
-                    //.AddEnvironmentVariables() // Allows advanced users to pass it via OS environment variables
                     .Build();
 
-                _discogsToken = config["Discogs:ApiToken"];
-
-                if (string.IsNullOrEmpty(_discogsToken))
-                {
-                    MessageBox.Show("Discogs API Token missing! Please create an appsettings.json file or set a 'Discogs__ApiToken' environment variable.", "Configuration Needed", MessageBoxButton.OK, MessageBoxImage.Warning);
-                }
+                _discogsToken = config["Discogs:ApiToken"] ?? "";
             }
             catch (Exception ex)
             {
@@ -126,6 +139,7 @@ namespace Record_Inventory
             {
                 using var connection = new SqliteConnection(ConnectionString);
                 var items = connection.Query("SELECT Title, Artist, EstimatedPrice as Price, Decision as Action FROM Inventory ORDER BY ScanDate DESC LIMIT 50");
+
                 foreach (var item in items)
                 {
                     ScannedHistory.Add(new AlbumRecord
@@ -137,44 +151,44 @@ namespace Record_Inventory
                     });
                 }
             }
-            catch { /* Fails silently if database is locked */ }
+            catch { /* Fails silently if database configuration conflicts */ }
         }
 
-        private async void BarcodeTextBox_KeyDown(object sender, KeyEventArgs e)
+        private void BarcodeTextBox_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Enter)
             {
                 string input = BarcodeTextBox.Text.Trim();
 
+                BarcodeTextBox.Clear();
+                e.Handled = true;
+
                 if (!string.IsNullOrEmpty(input))
                 {
-                    // Check for our secret developer factory-reset command
                     if (input.Equals("NUKEDB", StringComparison.OrdinalIgnoreCase))
                     {
                         HandleDatabaseNuke();
                     }
                     else
                     {
-                        // Proceed with regular vinyl lookup
-                        await ProcessBarcodeAsync(input);
+                        // Completely non-blocking background threads execution
+                        Task.Run(async () =>
+                        {
+                            await ProcessBarcodeAsync(input);
+                        });
                     }
                 }
-
-                BarcodeTextBox.Clear();
-                BarcodeTextBox.Focus();
-                e.Handled = true;
             }
         }
 
         private void HandleDatabaseNuke()
         {
-            // 1. Fire the warning prompt dialog box
             MessageBoxResult result = MessageBox.Show(
                 "This will delete the entire database. Are you sure?",
                 "CRITICAL: Confirm Database Purge",
                 MessageBoxButton.YesNo,
                 MessageBoxImage.Warning,
-                MessageBoxResult.No // Default button focus is safely set to "No"
+                MessageBoxResult.No
             );
 
             if (result == MessageBoxResult.Yes)
@@ -182,30 +196,22 @@ namespace Record_Inventory
                 try
                 {
                     using var connection = new SqliteConnection(ConnectionString);
-
-                    // Wipe out all records inside the table
                     connection.Execute("DELETE FROM Inventory;");
-
-                    // Optional: Resets the SQLite auto-increment counter back to 1
                     connection.Execute("DELETE FROM sqlite_sequence WHERE name='Inventory';");
 
-                    // Clear the right-hand visual sidebar log immediately
-                    ScannedHistory.Clear();
+                    Application.Current.Dispatcher.Invoke(() => ScannedHistory.Clear());
 
-                    // Reset the spotlight display panel view back to pristine state
                     CurrentArtist = "Database Purged Completely.";
                     CurrentTitle = "---";
                     CurrentYear = "---";
+                    CurrentGenre = "---";
+                    CurrentStyle = "---";
                     CurrentRating = 0.0;
                     CurrentPrice = 0.00;
                     SuggestedAction = "AWAITING SCAN";
                     CurrentAlbumArt = null;
+                    PlaceholderVisibility = Visibility.Visible;
                     _currentActiveDatabaseId = -1;
-
-                    this.DataContext = null;
-                    this.DataContext = this;
-
-                    MessageBox.Show("All database tables have been successfully cleared.", "Success", MessageBoxButton.OK, MessageBoxImage.Information);
                 }
                 catch (Exception ex)
                 {
@@ -216,14 +222,11 @@ namespace Record_Inventory
 
         private async void LogList_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
         {
-            // 1. Ensure the user actually selected a valid row item
             if (sender is System.Windows.Controls.ListView listView && listView.SelectedItem is AlbumRecord selectedAlbum)
             {
                 try
                 {
                     using var connection = new SqliteConnection(ConnectionString);
-
-                    // 2. Query the deep metadata from your local SQLite storage using the unique matching Title & Artist
                     var dbRecord = connection.QueryFirstOrDefault(
                         "SELECT * FROM Inventory WHERE Title = @Title AND Artist = @Artist ORDER BY ScanDate DESC",
                         new { Title = selectedAlbum.Title, Artist = selectedAlbum.Artist }
@@ -231,45 +234,44 @@ namespace Record_Inventory
 
                     if (dbRecord != null)
                     {
-                        // 3. Re-populate the spotlight display fields smoothly
                         CurrentTitle = dbRecord.Title?.ToString() ?? "";
                         CurrentArtist = dbRecord.Artist?.ToString() ?? "";
                         CurrentYear = dbRecord.ReleaseYear?.ToString() ?? "---";
+                        CurrentGenre = dbRecord.Genre?.ToString() ?? "---";
+                        CurrentStyle = dbRecord.Style?.ToString() ?? "---";
                         CurrentRating = dbRecord.Rating != null ? Convert.ToDouble(dbRecord.Rating) : 0.0;
                         CurrentPrice = dbRecord.EstimatedPrice != null ? Convert.ToDouble(dbRecord.EstimatedPrice) : 0.00;
                         SuggestedAction = dbRecord.Decision?.ToString() ?? "AWAITING SCAN";
-
-                        // Track the true database row ID so your "Delete Active" button still points to the correct entry!
                         _currentActiveDatabaseId = Convert.ToInt64(dbRecord.Id);
 
-                        // 4. Safely pull a fresh copy of the cover art over the API network or leave it clear if missing
                         var searchData = await FetchFromDiscogsAsync(dbRecord.Barcode?.ToString() ?? "");
+
+                        BitmapImage? historicalArt = null;
                         if (searchData != null && !string.IsNullOrEmpty(searchData.CoverImageUrl))
                         {
-                            CurrentAlbumArt = await DownloadImageAsync(searchData.CoverImageUrl);
+                            historicalArt = await DownloadImageAsync(searchData.CoverImageUrl);
                         }
-                        else
-                        {
-                            CurrentAlbumArt = null;
-                        }
+
+                        CurrentAlbumArt = historicalArt;
+                        PlaceholderVisibility = historicalArt != null ? Visibility.Collapsed : Visibility.Visible;
                     }
                 }
-                catch (Exception ex)
+                catch
                 {
-                    // Fallback to basic view if network image download fails
                     CurrentTitle = selectedAlbum.Title;
                     CurrentArtist = selectedAlbum.Artist;
                     CurrentPrice = selectedAlbum.Price;
                     SuggestedAction = selectedAlbum.Action;
+                    CurrentGenre = "---";
+                    CurrentStyle = "---";
+                    CurrentAlbumArt = null;
+                    PlaceholderVisibility = Visibility.Visible;
                     _currentActiveDatabaseId = -1;
                 }
                 finally
                 {
-                    // 5. Instantly force the WPF layout matrix to redraw and reflect updates on-screen
-                    RefreshUI();
-
-                    // 6. Clear out the list selection style so it's ready to be clicked again later
                     listView.SelectedIndex = -1;
+                    FocusInput();
                 }
             }
         }
@@ -279,50 +281,67 @@ namespace Record_Inventory
             try
             {
                 var albumData = await FetchFromDiscogsAsync(barcode);
-
                 CurrentTitle = albumData.Title;
                 CurrentArtist = albumData.Artist;
                 CurrentYear = albumData.Year;
                 CurrentRating = albumData.Rating;
                 CurrentPrice = albumData.MedianPrice;
+                CurrentGenre = albumData.Genre;
+                CurrentStyle = albumData.Style;
 
-                // Threshold Evaluator (Using 3.80 instead of 4.20 to safe-keep split reviews)
                 if (CurrentPrice >= 20.00) SuggestedAction = "SELL IT";
                 else if (CurrentRating >= 3.80) SuggestedAction = "KEEP IT";
                 else SuggestedAction = "BARGAIN BIN";
 
+                BitmapImage? downloadedArt = null;
                 if (!string.IsNullOrEmpty(albumData.CoverImageUrl))
                 {
-                    CurrentAlbumArt = await DownloadImageAsync(albumData.CoverImageUrl);
+                    downloadedArt = await DownloadImageAsync(albumData.CoverImageUrl);
                 }
 
-                _currentActiveDatabaseId = SaveToDatabase(barcode, CurrentArtist, CurrentTitle, CurrentYear, CurrentRating, CurrentPrice, SuggestedAction);
-
-                ScannedHistory.Insert(0, new AlbumRecord
+                Application.Current.Dispatcher.Invoke(() =>
                 {
-                    Title = CurrentTitle,
-                    Artist = CurrentArtist,
-                    Price = CurrentPrice,
-                    Action = SuggestedAction
+                    CurrentAlbumArt = downloadedArt;
+                    PlaceholderVisibility = downloadedArt != null ? Visibility.Collapsed : Visibility.Visible;
+
+                    ScannedHistory.Insert(0, new AlbumRecord
+                    {
+                        Title = CurrentTitle,
+                        Artist = CurrentArtist,
+                        Price = CurrentPrice,
+                        Action = SuggestedAction
+                    });
                 });
 
-                RefreshUI();
+                _currentActiveDatabaseId = SaveToDatabase(barcode, CurrentArtist, CurrentTitle, CurrentYear, CurrentRating, CurrentPrice, SuggestedAction, CurrentGenre, CurrentStyle);
             }
             catch (Exception ex)
             {
-                SuggestedAction = "ERROR";
-                CurrentTitle = ex.Message;
+                Application.Current.Dispatcher.Invoke(() =>
+                {
+                    SuggestedAction = "ERROR";
+                    CurrentTitle = ex.Message;
+                    CurrentArtist = "Barcode Not Found";
+                    CurrentYear = "---";
+                    CurrentGenre = "---";
+                    CurrentStyle = "---";
+                    CurrentAlbumArt = null;
+                    PlaceholderVisibility = Visibility.Visible;
+                });
                 _currentActiveDatabaseId = -1;
-                RefreshUI();
+            }
+            finally
+            {
+                FocusInput();
             }
         }
 
-        private long SaveToDatabase(string barcode, string artist, string title, string year, double rating, double price, string decision)
+        private long SaveToDatabase(string barcode, string artist, string title, string year, double rating, double price, string decision, string genre, string style)
         {
             using var connection = new SqliteConnection(ConnectionString);
             string insertSql = @"
-                INSERT INTO Inventory (Barcode, Artist, Title, ReleaseYear, Rating, EstimatedPrice, Decision)
-                VALUES (@Barcode, @Artist, @Title, @ReleaseYear, @Rating, @EstimatedPrice, @Decision);
+                INSERT INTO Inventory (Barcode, Artist, Title, ReleaseYear, Rating, EstimatedPrice, Decision, Genre, Style)
+                VALUES (@Barcode, @Artist, @Title, @ReleaseYear, @Rating, @EstimatedPrice, @Decision, @Genre, @Style);
                 SELECT last_insert_rowid();";
 
             return connection.ExecuteScalar<long>(insertSql, new
@@ -333,7 +352,9 @@ namespace Record_Inventory
                 ReleaseYear = year,
                 Rating = rating,
                 EstimatedPrice = price,
-                Decision = decision
+                Decision = decision,
+                Genre = genre,
+                Style = style
             });
         }
 
@@ -351,16 +372,17 @@ namespace Record_Inventory
                 {
                     using var connection = new SqliteConnection(ConnectionString);
                     var items = connection.Query("SELECT * FROM Inventory ORDER BY ScanDate DESC");
-
                     StringBuilder csvContent = new StringBuilder();
-                    csvContent.AppendLine("Barcode,Artist,Title,Release Year,Community Rating,Estimated Price,Decision,Scan Date");
+                    csvContent.AppendLine("Barcode,Artist,Title,Release Year,Genre,Style,Community Rating,Estimated Price,Decision,Scan Date");
 
                     foreach (var item in items)
                     {
                         string cleanArtist = $"\"{item.Artist?.ToString().Replace("\"", "\"\"")}\"";
                         string cleanTitle = $"\"{item.Title?.ToString().Replace("\"", "\"\"")}\"";
+                        string cleanGenre = $"\"{item.Genre?.ToString().Replace("\"", "\"\"")}\"";
+                        string cleanStyle = $"\"{item.Style?.ToString().Replace("\"", "\"\"")}\"";
 
-                        csvContent.AppendLine($"{item.Barcode},{cleanArtist},{cleanTitle},{item.ReleaseYear},{item.Rating},{item.EstimatedPrice},{item.Decision},{item.ScanDate}");
+                        csvContent.AppendLine($"{item.Barcode},{cleanArtist},{cleanTitle},{item.ReleaseYear},{cleanGenre},{cleanStyle},{item.Rating},{item.EstimatedPrice},{item.Decision},{item.ScanDate}");
                     }
 
                     File.WriteAllText(saveFileDialog.FileName, csvContent.ToString(), Encoding.UTF8);
@@ -389,19 +411,20 @@ namespace Record_Inventory
                 var visualItem = ScannedHistory.FirstOrDefault(x => x.Title == CurrentTitle && x.Artist == CurrentArtist);
                 if (visualItem != null)
                 {
-                    ScannedHistory.Remove(visualItem);
+                    Application.Current.Dispatcher.Invoke(() => ScannedHistory.Remove(visualItem));
                 }
 
                 CurrentArtist = "Record Removed Successfully.";
                 CurrentTitle = "---";
                 CurrentYear = "---";
+                CurrentGenre = "---";
+                CurrentStyle = "---";
                 CurrentRating = 0.0;
                 CurrentPrice = 0.00;
                 SuggestedAction = "DELETED";
                 CurrentAlbumArt = null;
+                PlaceholderVisibility = Visibility.Visible;
                 _currentActiveDatabaseId = -1;
-
-                RefreshUI();
             }
             catch (Exception ex)
             {
@@ -409,60 +432,148 @@ namespace Record_Inventory
             }
         }
 
-        private void RefreshUI()
+        private void FocusInput()
         {
-            this.DataContext = null;
-            this.DataContext = this;
+            Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                BarcodeTextBox.Focus();
+                Keyboard.Focus(BarcodeTextBox);
+            }), System.Windows.Threading.DispatcherPriority.Input);
         }
 
         private async Task<DiscogsResult> FetchFromDiscogsAsync(string barcode)
         {
-            string url = $"https://api.discogs.com/database/search?barcode={barcode}";
-            HttpResponseMessage response = await _httpClient.GetAsync(url);
+            // FIX: Append the token directly into the URL query string as a parameter!
+            // This completely bypasses the need for custom Header Authorization objects.
+            string url = $"https://api.discogs.com/database/search?barcode={barcode}&token={_discogsToken}";
 
-            if (!response.IsSuccessStatusCode)
-                throw new Exception($"Discogs Web Client Error: {response.StatusCode}");
-
-            string jsonString = await response.Content.ReadAsStringAsync();
-
-            using (System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(jsonString))
+            using (var apiClient = new HttpClient())
             {
-                var root = doc.RootElement;
-                if (root.TryGetProperty("results", out var results) && results.GetArrayLength() > 0)
+                // Discogs still strictly requires a User-Agent so they know it's a valid app request
+                apiClient.DefaultRequestHeaders.Add("User-Agent", "VinylSorterApp/1.0 (contact@yourdomain.com)");
+
+                HttpResponseMessage response = await apiClient.GetAsync(url);
+
+                if (!response.IsSuccessStatusCode)
+                    throw new Exception($"Discogs Server Response Error: {response.StatusCode}");
+
+                string jsonString = await response.Content.ReadAsStringAsync();
+
+                using (System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(jsonString))
                 {
-                    var firstResult = results[0];
-                    string fullTitle = firstResult.GetProperty("title").GetString() ?? "Unknown - Unknown";
+                    var root = doc.RootElement;
+                    if (!root.TryGetProperty("results", out var results) || results.GetArrayLength() == 0)
+                    {
+                        throw new Exception("Barcode variant not recognized in Discogs directory database.");
+                    }
+
+                    System.Text.Json.JsonElement activeTargetResult = results[0];
+                    string coverUrl = "";
+
+                    foreach (System.Text.Json.JsonElement tempResult in results.EnumerateArray())
+                    {
+                        string tempUrl = "";
+
+                        if (tempResult.TryGetProperty("cover_image", out var imgProp))
+                        {
+                            tempUrl = imgProp.GetString() ?? "";
+                        }
+
+                        if (tempUrl.Contains("spacer.gif") || tempUrl.Contains("pixel.gif"))
+                        {
+                            tempUrl = "";
+                        }
+
+                        if (string.IsNullOrEmpty(tempUrl))
+                        {
+                            if (tempResult.TryGetProperty("thumb", out var thumbProp))
+                            {
+                                tempUrl = thumbProp.GetString() ?? "";
+                            }
+                        }
+
+                        if (tempUrl.Contains("spacer.gif") || tempUrl.Contains("pixel.gif"))
+                        {
+                            tempUrl = "";
+                        }
+
+                        if (!string.IsNullOrEmpty(tempUrl))
+                        {
+                            activeTargetResult = tempResult;
+                            coverUrl = tempUrl;
+                            break;
+                        }
+                    }
+
+                    var selectedItem = activeTargetResult;
+
+                    string fullTitle = "Unknown - Unknown";
+                    if (selectedItem.TryGetProperty("title", out var titleProp))
+                    {
+                        fullTitle = titleProp.GetString() ?? "Unknown - Unknown";
+                    }
+
                     string[] parts = fullTitle.Split(new[] { " - " }, 2, StringSplitOptions.None);
                     string artist = parts.Length > 0 ? parts[0] : "Unknown";
                     string title = parts.Length > 1 ? parts[1] : "Unknown";
 
-                    string year = firstResult.TryGetProperty("year", out var yProp) ? yProp.GetString() ?? "---" : "---";
-                    string coverUrl = firstResult.TryGetProperty("cover_image", out var imgProp) ? imgProp.GetString() ?? "" : "";
+                    string year = "---";
+                    if (selectedItem.TryGetProperty("year", out var yProp))
+                    {
+                        year = yProp.GetString() ?? "---";
+                    }
 
-                    // Real live data mapping. (Temporary rating mock stays at a standard 4.15 for testing)
-                    return new DiscogsResult(title, artist, year, 4.15, 18.50, coverUrl);
+                    string genre = "---";
+                    if (selectedItem.TryGetProperty("genre", out var gProp) && gProp.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        genre = string.Join(", ", gProp.EnumerateArray().Select(x => x.GetString()));
+                    }
+
+                    string style = "---";
+                    if (selectedItem.TryGetProperty("style", out var sProp) && sProp.ValueKind == System.Text.Json.JsonValueKind.Array)
+                    {
+                        style = string.Join(", ", sProp.EnumerateArray().Select(x => x.GetString()));
+                    }
+
+                    return new DiscogsResult(title, artist, year, 4.15, 18.50, coverUrl, genre, style);
                 }
             }
-            throw new Exception("No matching vinyl records discovered under this barcode parameter.");
         }
 
         private async Task<BitmapImage?> DownloadImageAsync(string url)
         {
+            if (string.IsNullOrEmpty(url)) return null;
+
             try
             {
-                byte[] imageBytes = await _httpClient.GetByteArrayAsync(url);
-                var bitmap = new BitmapImage();
-                using (var stream = new MemoryStream(imageBytes))
+                using (var cleanClient = new HttpClient())
                 {
-                    bitmap.BeginInit();
-                    bitmap.CacheOption = BitmapCacheOption.OnLoad;
-                    bitmap.StreamSource = stream;
-                    bitmap.EndInit();
+                    cleanClient.DefaultRequestHeaders.Add("User-Agent", "VinylSorterApp/1.0 (contact@yourdomain.com)");
+
+                    byte[] imageBytes = await cleanClient.GetByteArrayAsync(url);
+                    var bitmap = new BitmapImage();
+
+                    using (var stream = new MemoryStream(imageBytes))
+                    {
+                        bitmap.BeginInit();
+                        bitmap.CacheOption = BitmapCacheOption.OnLoad;
+                        bitmap.StreamSource = stream;
+                        bitmap.EndInit();
+                    }
+                    bitmap.Freeze();
+                    return bitmap;
                 }
-                bitmap.Freeze();
-                return bitmap;
             }
-            catch { return null; }
+            catch
+            {
+                return null;
+            }
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+        protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
+        {
+            PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
         }
     }
 }
