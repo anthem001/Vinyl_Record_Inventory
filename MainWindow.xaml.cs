@@ -23,6 +23,7 @@ namespace Record_Inventory
         public string Artist { get; set; } = "";
         public double Price { get; set; }
         public string Action { get; set; } = "";
+        public BitmapImage? AlbumArt { get; set; }
     }
 
     public record DiscogsResult(string Title, string Artist, string Year, double Rating, double MedianPrice, string CoverImageUrl, string Genre, string Style);
@@ -309,7 +310,8 @@ namespace Record_Inventory
                         Title = CurrentTitle,
                         Artist = CurrentArtist,
                         Price = CurrentPrice,
-                        Action = SuggestedAction
+                        Action = SuggestedAction,
+                        AlbumArt = downloadedArt,
                     });
                 });
 

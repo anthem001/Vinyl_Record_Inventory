@@ -52,7 +52,8 @@
                     <Border Grid.Row="0" Background="#1E1E1E" CornerRadius="8" Padding="15,20" BorderBrush="#2D2D2D" BorderThickness="1" Margin="0,0,0,15">
                         <StackPanel>
                             <TextBlock Text="{Binding CurrentArtist, FallbackValue='Scan an album to begin...'}" Foreground="#1DB954" FontSize="26" FontWeight="Black" TextTrimming="CharacterEllipsis"/>
-                       </StackPanel>
+                            <TextBlock Text="{Binding CurrentTitle, FallbackValue='---'}" Foreground="#FFFFFF" FontSize="18" FontWeight="Bold" Margin="0,6,0,0" TextTrimming="CharacterEllipsis"/>
+                        </StackPanel>
                     </Border>
 
                     <Border Grid.Row="1" Background="#1E1E1E" CornerRadius="8" Padding="15" BorderBrush="#2D2D2D" BorderThickness="1">
@@ -85,7 +86,7 @@
                                 </StackPanel>
                             </Border>
 
-                            <Border Background="#252525" CornerRadius="6" Padding="12" Margin="5" Grid.ColumnSpan="1">
+                            <Border Background="#252525" CornerRadius="6" Padding="12" Margin="5">
                                 <StackPanel VerticalAlignment="Center">
                                     <TextBlock Text="GENRE" FontSize="10" Foreground="#808080" FontWeight="Bold"/>
                                     <TextBlock Text="{Binding CurrentGenre, FallbackValue='---'}" FontSize="13" Foreground="#E0E0E0" FontWeight="SemiBold" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding CurrentGenre}"/>
@@ -119,23 +120,37 @@
                         <TextBlock Grid.Column="0" Text="SESSION LOG" Foreground="#A0A0A0" FontSize="14" FontWeight="Bold" VerticalAlignment="Center"/>
                         <Button Grid.Column="2" Content="Export CSV" Background="#1DB954" Foreground="White" FontWeight="Bold" Padding="8,4" Click="ExportButton_Click"/>
                     </Grid>
-                    <ListView Grid.Row="1" x:Name="LogList" ItemsSource="{Binding ScannedHistory}" Background="Transparent" BorderThickness="0" Foreground="White" SelectionChanged="LogList_SelectionChanged">
-                        <ListView.View>
-                            <GridView>
-                                <GridViewColumn Header="Title" DisplayMemberBinding="{Binding Title}" Width="130"/>
-                                <GridViewColumn Header="Artist" DisplayMemberBinding="{Binding Artist}" Width="110"/>
-                                <GridViewColumn Header="Price" DisplayMemberBinding="{Binding Price, StringFormat={}{0:C}}" Width="60"/>
-                                <GridViewColumn Header="Action" DisplayMemberBinding="{Binding Action}" Width="80"/>
-                            </GridView>
-                        </ListView.View>
+
+                    <ListView Grid.Row="1" x:Name="LogList" ItemsSource="{Binding ScannedHistory}" Background="Transparent" BorderThickness="0" Foreground="White" SelectionChanged="LogList_SelectionChanged" HorizontalContentAlignment="Stretch" ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                        <ListView.ItemTemplate>
+                            <DataTemplate>
+                                <Grid Margin="0,2" HorizontalAlignment="Stretch">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="Auto"/>
+                                        <ColumnDefinition Width="*"/>
+                                        <ColumnDefinition Width="Auto"/>
+                                    </Grid.ColumnDefinitions>
+                                    <StackPanel Grid.Column="0" VerticalAlignment="Center" Margin="0,0,10,0">
+                                        <TextBlock Text="{Binding Title}" Foreground="#FFFFFF" FontSize="14" FontWeight="Bold" TextTrimming="CharacterEllipsis" Margin="0,0,0,2"/>
+                                        <TextBlock Text="{Binding Artist}" Foreground="#8A8A8A" FontSize="12" FontWeight="Medium" TextTrimming="CharacterEllipsis"/>
+                                    </StackPanel>
+                                </Grid>
+                            </DataTemplate>
+                        </ListView.ItemTemplate>
+
                         <ListView.ItemContainerStyle>
                             <Style TargetType="ListViewItem">
                                 <Setter Property="Background" Value="Transparent"/>
-                                <Setter Property="Margin" Value="0,2"/>
-                                <Setter Property="Padding" Value="5"/>
+                                <Setter Property="BorderBrush" Value="#202020"/>
+                                <Setter Property="BorderThickness" Value="0,0,0,1"/>
+                                <Setter Property="Padding" Value="6,10"/>
+                                <Setter Property="HorizontalContentAlignment" Value="Stretch"/>
                                 <Style.Triggers>
                                     <Trigger Property="IsMouseOver" Value="True">
-                                        <Setter Property="Background" Value="#2A2A2A"/>
+                                        <Setter Property="Background" Value="#1A1A1A"/>
+                                    </Trigger>
+                                    <Trigger Property="IsSelected" Value="True">
+                                        <Setter Property="Background" Value="#252525"/>
                                     </Trigger>
                                 </Style.Triggers>
                             </Style>
