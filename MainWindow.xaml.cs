@@ -30,7 +30,7 @@ namespace Record_Inventory
 
     public partial class MainWindow : Window, INotifyPropertyChanged
     {
-        private const string ConnectionString = "Data Source=vinyl_inventory.db";
+        private static readonly string ConnectionString = $"Data Source={Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "vinyl_inventory.db")}";
         private long _currentActiveDatabaseId = -1;
         private string _discogsToken = "";
 
@@ -122,11 +122,17 @@ namespace Record_Inventory
             try
             {
                 var config = new ConfigurationBuilder()
-                    .SetBasePath(Directory.GetCurrentDirectory())
+                    .SetBasePath(AppDomain.CurrentDomain.BaseDirectory) // Forces the portable directory target
                     .AddJsonFile("appsettings.json", optional: true, reloadOnChange: true)
                     .Build();
 
                 _discogsToken = config["Discogs:ApiToken"] ?? "";
+
+                if (string.IsNullOrEmpty(_discogsToken))
+                {
+                    MessageBox.Show("Discogs API Token missing! Please place an appsettings.json file in this folder.",
+                                    "Configuration Needed", MessageBoxButton.OK, MessageBoxImage.Warning);
+                }
             }
             catch (Exception ex)
             {
