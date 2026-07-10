@@ -26,7 +26,7 @@ namespace Record_Inventory
         public BitmapImage? AlbumArt { get; set; }
     }
 
-    public record DiscogsResult(string Title, string Artist, string Year, double Rating, double MedianPrice, string CoverImageUrl, string Genre, string Style);
+    public record DiscogsResult(string Title, string Artist, string Year, double Rating, double MedianPrice, string CoverImageUrl, string Genre, string Style, string Id);
 
     public partial class MainWindow : Window, INotifyPropertyChanged
     {
@@ -283,64 +283,77 @@ namespace Record_Inventory
             }
         }
 
-        public async Task ProcessBarcodeAsync(string barcode)
+        public async Task ProcessBarcodeAsync(string input)
         {
             try
             {
-                var albumData = await FetchFromDiscogsAsync(barcode);
-                CurrentTitle = albumData.Title;
-                CurrentArtist = albumData.Artist;
-                CurrentYear = albumData.Year;
-                CurrentRating = albumData.Rating;
-                CurrentPrice = albumData.MedianPrice;
-                CurrentGenre = albumData.Genre;
-                CurrentStyle = albumData.Style;
+                // Simple regex check: if it contains non-digits, treat it as an Artist/Catalog keyword search
+                bool isTextSearch = input.Any(c => !char.IsDigit(c));
+
+                List<DiscogsResult> searchResults = await FetchFromDiscogsAsync(input, isTextSearch);
+                DiscogsResult targetAlbum = null;
+
+                if (isTextSearch)
+                {
+                    // If text search returned multiple records, launch the selection popup dialog box
+                    targetAlbum = PromptUserForSelection(searchResults);
+                    if (targetAlbum == null) return; // User aborted the popup operation
+                }
+                else
+                {
+                    // Barcode match returns index zero straight out of the array context
+                    targetAlbum = searchResults[0];
+                }
+
+                // Display properties update block
+                CurrentTitle = targetAlbum.Title;
+                CurrentArtist = targetAlbum.Artist;
+                CurrentYear = targetAlbum.Year;
+                CurrentRating = targetAlbum.Rating;
+                CurrentPrice = targetAlbum.MedianPrice;
+                CurrentGenre = targetAlbum.Genre;
+                CurrentStyle = targetAlbum.Style;
 
                 if (CurrentPrice >= 20.00) SuggestedAction = "SELL IT";
                 else if (CurrentRating >= 3.80) SuggestedAction = "KEEP IT";
                 else SuggestedAction = "BARGAIN BIN";
 
-                BitmapImage? downloadedArt = null;
-                if (!string.IsNullOrEmpty(albumData.CoverImageUrl))
+                if (!string.IsNullOrEmpty(targetAlbum.CoverImageUrl))
                 {
-                    downloadedArt = await DownloadImageAsync(albumData.CoverImageUrl);
+                    CurrentAlbumArt = await DownloadImageAsync(targetAlbum.CoverImageUrl);
+                }
+                else
+                {
+                    CurrentAlbumArt = null;
                 }
 
+                // Commit to database file automatically
+                string codeIdentifier = isTextSearch ? $"MANUAL_ID_{targetAlbum.Id}" : input;
+                _currentActiveDatabaseId = SaveToDatabase(codeIdentifier, CurrentArtist, CurrentTitle, CurrentYear, CurrentRating, CurrentPrice, SuggestedAction, CurrentGenre, CurrentStyle);
+
+                // Hand modification down smoothly via the dispatcher queue layout thread
                 Application.Current.Dispatcher.Invoke(() =>
                 {
-                    CurrentAlbumArt = downloadedArt;
-                    PlaceholderVisibility = downloadedArt != null ? Visibility.Collapsed : Visibility.Visible;
-
                     ScannedHistory.Insert(0, new AlbumRecord
                     {
                         Title = CurrentTitle,
                         Artist = CurrentArtist,
                         Price = CurrentPrice,
-                        Action = SuggestedAction,
-                        AlbumArt = downloadedArt,
+                        Action = SuggestedAction
                     });
                 });
 
-                _currentActiveDatabaseId = SaveToDatabase(barcode, CurrentArtist, CurrentTitle, CurrentYear, CurrentRating, CurrentPrice, SuggestedAction, CurrentGenre, CurrentStyle);
+                RefreshUI();
             }
             catch (Exception ex)
             {
-                Application.Current.Dispatcher.Invoke(() =>
-                {
-                    SuggestedAction = "ERROR";
-                    CurrentTitle = ex.Message;
-                    CurrentArtist = "Barcode Not Found";
-                    CurrentYear = "---";
-                    CurrentGenre = "---";
-                    CurrentStyle = "---";
-                    CurrentAlbumArt = null;
-                    PlaceholderVisibility = Visibility.Visible;
-                });
+                SuggestedAction = "ERROR";
+                CurrentTitle = ex.Message;
+                CurrentArtist = "Search Aborted";
+                CurrentGenre = "---";
+                CurrentStyle = "---";
                 _currentActiveDatabaseId = -1;
-            }
-            finally
-            {
-                FocusInput();
+                RefreshUI();
             }
         }
 
@@ -449,103 +462,148 @@ namespace Record_Inventory
             }), System.Windows.Threading.DispatcherPriority.Input);
         }
 
-        private async Task<DiscogsResult> FetchFromDiscogsAsync(string barcode)
+        private async Task<List<DiscogsResult>> FetchFromDiscogsAsync(string input, bool isTextSearch = false)
         {
-            // FIX: Append the token directly into the URL query string as a parameter!
-            // This completely bypasses the need for custom Header Authorization objects.
-            string url = $"https://api.discogs.com/database/search?barcode={barcode}&token={_discogsToken}";
+            var resultsList = new List<List<DiscogsResult>>();
+            // Dynamically build the endpoint based on query parameters
+            string url = isTextSearch
+                ? $"https://api.discogs.com/database/search?q={Uri.EscapeDataString(input)}&type=release&token={_discogsToken}"
+                : $"https://api.discogs.com/database/search?barcode={input}&token={_discogsToken}";
 
-            using (var apiClient = new HttpClient())
+            using var apiClient = new HttpClient();
+            apiClient.DefaultRequestHeaders.Add("User-Agent", "VinylSorterApp/1.0 (contact@yourdomain.com)");
+
+            HttpResponseMessage response = await apiClient.GetAsync(url);
+            if (!response.IsSuccessStatusCode)
+                throw new Exception($"Discogs Web Client Error: {response.StatusCode}");
+
+            string jsonString = await response.Content.ReadAsStringAsync();
+            var foundItems = new List<DiscogsResult>();
+
+            using (System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(jsonString))
             {
-                // Discogs still strictly requires a User-Agent so they know it's a valid app request
-                apiClient.DefaultRequestHeaders.Add("User-Agent", "VinylSorterApp/1.0 (contact@yourdomain.com)");
-
-                HttpResponseMessage response = await apiClient.GetAsync(url);
-
-                if (!response.IsSuccessStatusCode)
-                    throw new Exception($"Discogs Server Response Error: {response.StatusCode}");
-
-                string jsonString = await response.Content.ReadAsStringAsync();
-
-                using (System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(jsonString))
+                var root = doc.RootElement;
+                if (root.TryGetProperty("results", out var results) && results.GetArrayLength() > 0)
                 {
-                    var root = doc.RootElement;
-                    if (!root.TryGetProperty("results", out var results) || results.GetArrayLength() == 0)
+                    // If it's a barcode scan, we only want the top match. If it's text, grab up to 5 options.
+                    int itemsToTake = isTextSearch ? Math.Min(5, results.GetArrayLength()) : 1;
+
+                    for (int i = 0; i < itemsToTake; i++)
                     {
-                        throw new Exception("Barcode variant not recognized in Discogs directory database.");
+                        var item = results[i];
+                        string id = item.TryGetProperty("id", out var idProp) ? idProp.GetInt64().ToString() : "";
+                        string fullTitle = item.TryGetProperty("title", out var tProp) ? tProp.GetString() ?? "Unknown - Unknown" : "Unknown - Unknown";
+
+                        string[] parts = fullTitle.Split(new[] { " - " }, 2, StringSplitOptions.None);
+                        string artist = parts.Length > 0 ? parts[0] : "Unknown";
+                        string title = parts.Length > 1 ? parts[1] : "Unknown";
+
+                        string year = item.TryGetProperty("year", out var yProp) ? yProp.GetString() ?? "---" : "---";
+
+                        // Fallback extraction system for image resources
+                        string coverUrl = "";
+                        if (item.TryGetProperty("cover_image", out var imgProp) && !string.IsNullOrEmpty(imgProp.GetString()) && !imgProp.GetString().Contains("spacer.gif"))
+                            coverUrl = imgProp.GetString()!;
+                        else if (item.TryGetProperty("thumb", out var thumbProp) && !string.IsNullOrEmpty(thumbProp.GetString()) && !thumbProp.GetString().Contains("spacer.gif"))
+                            coverUrl = thumbProp.GetString()!;
+
+                        string genre = "---";
+                        if (item.TryGetProperty("genre", out var gProp) && gProp.ValueKind == System.Text.Json.JsonValueKind.Array)
+                            genre = string.Join(", ", gProp.EnumerateArray().Select(x => x.GetString()));
+
+                        string style = "---";
+                        if (item.TryGetProperty("style", out var sProp) && sProp.ValueKind == System.Text.Json.JsonValueKind.Array)
+                            style = string.Join(", ", sProp.EnumerateArray().Select(x => x.GetString()));
+
+                        // Standard mock values for calculation engines
+                        foundItems.Add(new DiscogsResult(title, artist, year, 4.15, 18.50, coverUrl, genre, style, id));
                     }
-
-                    System.Text.Json.JsonElement activeTargetResult = results[0];
-                    string coverUrl = "";
-
-                    foreach (System.Text.Json.JsonElement tempResult in results.EnumerateArray())
-                    {
-                        string tempUrl = "";
-
-                        if (tempResult.TryGetProperty("cover_image", out var imgProp))
-                        {
-                            tempUrl = imgProp.GetString() ?? "";
-                        }
-
-                        if (tempUrl.Contains("spacer.gif") || tempUrl.Contains("pixel.gif"))
-                        {
-                            tempUrl = "";
-                        }
-
-                        if (string.IsNullOrEmpty(tempUrl))
-                        {
-                            if (tempResult.TryGetProperty("thumb", out var thumbProp))
-                            {
-                                tempUrl = thumbProp.GetString() ?? "";
-                            }
-                        }
-
-                        if (tempUrl.Contains("spacer.gif") || tempUrl.Contains("pixel.gif"))
-                        {
-                            tempUrl = "";
-                        }
-
-                        if (!string.IsNullOrEmpty(tempUrl))
-                        {
-                            activeTargetResult = tempResult;
-                            coverUrl = tempUrl;
-                            break;
-                        }
-                    }
-
-                    var selectedItem = activeTargetResult;
-
-                    string fullTitle = "Unknown - Unknown";
-                    if (selectedItem.TryGetProperty("title", out var titleProp))
-                    {
-                        fullTitle = titleProp.GetString() ?? "Unknown - Unknown";
-                    }
-
-                    string[] parts = fullTitle.Split(new[] { " - " }, 2, StringSplitOptions.None);
-                    string artist = parts.Length > 0 ? parts[0] : "Unknown";
-                    string title = parts.Length > 1 ? parts[1] : "Unknown";
-
-                    string year = "---";
-                    if (selectedItem.TryGetProperty("year", out var yProp))
-                    {
-                        year = yProp.GetString() ?? "---";
-                    }
-
-                    string genre = "---";
-                    if (selectedItem.TryGetProperty("genre", out var gProp) && gProp.ValueKind == System.Text.Json.JsonValueKind.Array)
-                    {
-                        genre = string.Join(", ", gProp.EnumerateArray().Select(x => x.GetString()));
-                    }
-
-                    string style = "---";
-                    if (selectedItem.TryGetProperty("style", out var sProp) && sProp.ValueKind == System.Text.Json.JsonValueKind.Array)
-                    {
-                        style = string.Join(", ", sProp.EnumerateArray().Select(x => x.GetString()));
-                    }
-
-                    return new DiscogsResult(title, artist, year, 4.15, 18.50, coverUrl, genre, style);
                 }
             }
+
+            if (foundItems.Count == 0)
+                throw new Exception("No matching vinyl records discovered under these parameters.");
+
+            return foundItems;
+        }
+
+        private DiscogsResult PromptUserForSelection(List<DiscogsResult> choices)
+        {
+            DiscogsResult selectedChoice = null;
+
+            // Create a dynamic selection popup window container shell
+            Window popup = new Window
+            {
+                Title = "Select Album Pressing Match",
+                Width = 450,
+                Height = 320,
+                WindowStartupLocation = WindowStartupLocation.CenterOwner,
+                Owner = this,
+                Background = new System.Windows.Media.SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#1E1E1E")),
+                WindowStyle = WindowStyle.ToolWindow,
+                ResizeMode = ResizeMode.NoResize
+            };
+
+            System.Windows.Controls.Grid mainGrid = new System.Windows.Controls.Grid();
+            mainGrid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = System.Windows.GridLength.Auto });
+            mainGrid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = new System.Windows.GridLength(1, System.Windows.GridUnitType.Star) });
+            mainGrid.RowDefinitions.Add(new System.Windows.Controls.RowDefinition { Height = System.Windows.GridLength.Auto });
+
+            System.Windows.Controls.TextBlock titleTxt = new System.Windows.Controls.TextBlock
+            {
+                Text = "Multiple entries found. Select the precise album model:",
+                Foreground = System.Windows.Media.Brushes.White,
+                Margin = new Thickness(15, 15, 15, 5),
+                FontSize = 14,
+                FontWeight = FontWeights.Bold
+            };
+            System.Windows.Controls.Grid.SetRow(titleTxt, 0);
+            mainGrid.Children.Add(titleTxt);
+
+            System.Windows.Controls.ListBox listBox = new System.Windows.Controls.ListBox
+            {
+                Margin = new Thickness(15, 5, 15, 10),
+                Background = new System.Windows.Media.SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#2D2D2D")),
+                Foreground = System.Windows.Media.Brushes.White,
+                BorderThickness = new Thickness(0)
+            };
+
+            foreach (var choice in choices)
+            {
+                listBox.Items.Add($"{choice.Artist} - {choice.Title} [{choice.Year}]");
+            }
+            listBox.SelectedIndex = 0; // Default selection fallback
+            System.Windows.Controls.Grid.SetRow(listBox, 1);
+            mainGrid.Children.Add(listBox);
+
+            System.Windows.Controls.Button confirmBtn = new System.Windows.Controls.Button
+            {
+                Content = "Add Selected Album to Inventory",
+                Height = 35,
+                Margin = new Thickness(15, 0, 15, 15),
+                Background = new System.Windows.Media.SolidColorBrush((System.Windows.Media.Color)System.Windows.Media.ColorConverter.ConvertFromString("#007ACC")),
+                Foreground = System.Windows.Media.Brushes.White,
+                FontWeight = FontWeights.SemiBold,
+                BorderThickness = new Thickness(0)
+            };
+
+            confirmBtn.Click += (s, e) =>
+            {
+                if (listBox.SelectedIndex >= 0)
+                {
+                    selectedChoice = choices[listBox.SelectedIndex];
+                }
+                popup.DialogResult = true;
+                popup.Close();
+            };
+            System.Windows.Controls.Grid.SetRow(confirmBtn, 2);
+            mainGrid.Children.Add(confirmBtn);
+
+            popup.Content = mainGrid;
+
+            // If user explicitly closes out or hits cancel, return null to cancel tracking safely
+            bool? result = popup.ShowDialog();
+            return result == true ? selectedChoice : null;
         }
 
         private async Task<BitmapImage?> DownloadImageAsync(string url)
@@ -582,6 +640,73 @@ namespace Record_Inventory
         protected void OnPropertyChanged([CallerMemberName] string? propertyName = null)
         {
             PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(propertyName));
+        }
+
+        private void RefreshUI()
+        {
+            // Force the WPF layout engine to redraw and update the UI fields
+            this.DataContext = null;
+            this.DataContext = this;
+
+            // Safely shift focus back into the input box so you can scan continuously
+            Application.Current.Dispatcher.BeginInvoke(new Action(() =>
+            {
+                BarcodeTextBox.Focus();
+            }), System.Windows.Threading.DispatcherPriority.Input);
+        }
+
+        private async void BtnManualSearch_Click(object sender, RoutedEventArgs e)
+        {
+            // Launch the window and pass our active authorization token down
+            var searchWindow = new ManualSearchWindow(_discogsToken);
+            searchWindow.Owner = this;
+
+            if (searchWindow.ShowDialog() == true && searchWindow.SelectedRecord != null)
+            {
+                var targetAlbum = searchWindow.SelectedRecord;
+
+                // Push values to the Spotlight view panels
+                CurrentTitle = targetAlbum.Title;
+                CurrentArtist = targetAlbum.Artist;
+                CurrentYear = targetAlbum.Year;
+                CurrentRating = targetAlbum.Rating;
+                CurrentPrice = targetAlbum.MedianPrice;
+                CurrentGenre = targetAlbum.Genre;
+                CurrentStyle = targetAlbum.Style;
+
+                // Calculate decision tracking labels
+                if (CurrentPrice >= 20.00) SuggestedAction = "SELL IT";
+                else if (CurrentRating >= 3.80) SuggestedAction = "KEEP IT";
+                else SuggestedAction = "BARGAIN BIN";
+
+                // Download the artwork if a link is provided
+                if (!string.IsNullOrEmpty(targetAlbum.CoverImageUrl))
+                {
+                    CurrentAlbumArt = await DownloadImageAsync(targetAlbum.CoverImageUrl);
+                }
+                else
+                {
+                    CurrentAlbumArt = null;
+                }
+
+                // Generate a placeholder "Manual ID" since there's no barcode sequence text string
+                string randomManualId = $"MANUAL_{DateTime.Now.Ticks}";
+
+                // Save straight to the SQLite file
+                _currentActiveDatabaseId = SaveToDatabase(randomManualId, CurrentArtist, CurrentTitle, CurrentYear, CurrentRating, CurrentPrice, SuggestedAction, CurrentGenre, CurrentStyle);
+
+                // Prepend seamlessly to your local Session Log sidebar
+                ScannedHistory.Insert(0, new AlbumRecord
+                {
+                    Title = CurrentTitle,
+                    Artist = CurrentArtist,
+                    Price = CurrentPrice,
+                    Action = SuggestedAction
+                });
+
+                // Redraw and shift cursor back safely
+                RefreshUI();
+            }
         }
     }
 }

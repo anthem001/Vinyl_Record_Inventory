@@ -1,0 +1,34 @@
+﻿<Window x:Class="Record_Inventory.ManualSearchWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
+        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
+        xmlns:local="clr-namespace:Record_Inventory"
+        mc:Ignorable="d"
+        Title="ManualSearchWindow" Height="450" Width="800">
+    <Grid Margin="20">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
+            <RowDefinition Height="*"/>
+            <RowDefinition Height="Auto"/>
+        </Grid.RowDefinitions>
+
+        <StackPanel Grid.Row="0" Margin="0,0,0,10">
+            <TextBlock Text="Artist Name (Optional)" Foreground="#AAAAAA" Margin="0,0,0,5"/>
+            <TextBox x:Name="TxtArtist" Height="30" Background="#2D2D2D" Foreground="White" BorderThickness="1" BorderBrush="#444444" Padding="5,0"/>
+        </StackPanel>
+
+        <StackPanel Grid.Row="1" Margin="0,0,0,15">
+            <TextBlock Text="Catalog Number / Title (Required)" Foreground="#AAAAAA" Margin="0,0,0,5"/>
+            <TextBox x:Name="TxtCatalog" Height="30" Background="#2D2D2D" Foreground="White" BorderThickness="1" BorderBrush="#444444" Padding="5,0"/>
+        </StackPanel>
+
+        <Button Grid.Row="2" Content="Query Discogs Database" Height="35" Background="#007ACC" Foreground="White" FontWeight="Bold" Click="BtnQuery_Click"/>
+
+        <ListBox x:Name="LstResults" Grid.Row="3" Margin="0,15,0,15" Background="#2D2D2D" Foreground="White" BorderThickness="0" DisplayMemberPath="DisplayTitle"/>
+
+        <Button x:Name="BtnAddAlbum" Grid.Row="4" Content="Add Selected Album to Inventory" Height="38" Background="#4CAF50" Foreground="White" FontWeight="Bold" IsEnabled="False" Click="BtnAddAlbum_Click"/>
+    </Grid>
+</Window>
