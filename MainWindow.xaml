@@ -54,54 +54,56 @@
 
                     <Border Grid.Row="0" Background="#1E1E1E" CornerRadius="8" Padding="15,20" BorderBrush="#2D2D2D" BorderThickness="1" Margin="0,0,0,15">
                         <StackPanel>
-                            <TextBlock Text="{Binding CurrentArtist, FallbackValue='Scan an album to begin...'}" Foreground="#1DB954" FontSize="26" FontWeight="Black" TextTrimming="CharacterEllipsis"/>
-                            <TextBlock Text="{Binding CurrentTitle, FallbackValue='---'}" Foreground="#FFFFFF" FontSize="18" FontWeight="Bold" Margin="0,6,0,0" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{Binding CurrentArtist, FallbackValue='Scan an album to begin...'}" Foreground="#1DB954" FontSize="28" FontWeight="Black" TextTrimming="CharacterEllipsis"/>
+                            <TextBlock Text="{Binding CurrentTitle, FallbackValue='---'}" Foreground="#FFFFFF" FontSize="20" FontWeight="Bold" Margin="0,6,0,0" TextTrimming="CharacterEllipsis"/>
                         </StackPanel>
                     </Border>
 
                     <Border Grid.Row="1" Background="#1E1E1E" CornerRadius="8" Padding="15" BorderBrush="#2D2D2D" BorderThickness="1">
                         <UniformGrid Columns="2" Rows="3">
+
                             <Border Background="#252525" CornerRadius="6" Padding="12" Margin="5">
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="RELEASE YEAR" FontSize="10" Foreground="#808080" FontWeight="Bold"/>
-                                    <TextBlock Text="{Binding CurrentYear, FallbackValue='---'}" FontSize="18" Foreground="#FFFFFF" FontWeight="Bold" Margin="0,4,0,0"/>
+                                    <TextBlock Text="RELEASE YEAR" FontSize="11" Foreground="#808080" FontWeight="Bold"/>
+                                    <TextBlock Text="{Binding CurrentYear, FallbackValue='---'}" FontSize="22" Foreground="#FFFFFF" FontWeight="Bold" Margin="0,4,0,0"/>
                                 </StackPanel>
                             </Border>
 
                             <Border Background="#252525" CornerRadius="6" Padding="12" Margin="5">
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="COMMUNITY RATING" FontSize="10" Foreground="#808080" FontWeight="Bold"/>
-                                    <TextBlock Text="{Binding RatingDisplayText, FallbackValue='---'}" FontSize="14" Foreground="#FFCC00" FontWeight="Bold" Margin="0,4,0,0" TextWrapping="Wrap"/>
+                                    <TextBlock Text="COMMUNITY RATING" FontSize="11" Foreground="#808080" FontWeight="Bold"/>
+                                    <TextBlock Text="{Binding RatingDisplayText, FallbackValue='---'}" FontSize="18" Foreground="#FFCC00" FontWeight="Bold" Margin="0,4,0,0" TextWrapping="Wrap"/>
                                 </StackPanel>
                             </Border>
 
                             <Border Background="#252525" CornerRadius="6" Padding="12" Margin="5">
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="ESTIMATED VALUE" FontSize="10" Foreground="#808080" FontWeight="Bold"/>
-                                    <TextBlock Text="{Binding CurrentPrice, StringFormat={}{0:C}, FallbackValue='$0.00'}" FontSize="18" Foreground="#FFFFFF" FontWeight="Bold" Margin="0,4,0,0"/>
+                                    <TextBlock Text="ESTIMATED VALUE" FontSize="11" Foreground="#808080" FontWeight="Bold"/>
+                                    <TextBlock Text="{Binding CurrentPrice, StringFormat={}{0:C}, FallbackValue='$0.00'}" FontSize="22" Foreground="#4CAF50" FontWeight="Bold" Margin="0,4,0,0"/>
                                 </StackPanel>
                             </Border>
 
                             <Border Background="#252525" CornerRadius="6" Padding="12" Margin="5">
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="SUGGESTED ACTION" FontSize="10" Foreground="#808080" FontWeight="Bold"/>
-                                    <TextBlock Text="{Binding SuggestedAction, FallbackValue='AWAITING SCAN'}" FontSize="16" Foreground="#FF3333" FontWeight="Black" Margin="0,4,0,0"/>
+                                    <TextBlock Text="SUGGESTED ACTION" FontSize="11" Foreground="#808080" FontWeight="Bold"/>
+                                    <TextBlock Text="{Binding SuggestedAction, FallbackValue='AWAITING SCAN'}" FontSize="20" Foreground="#FF3333" FontWeight="Black" Margin="0,4,0,0"/>
                                 </StackPanel>
                             </Border>
 
                             <Border Background="#252525" CornerRadius="6" Padding="12" Margin="5">
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="GENRE" FontSize="10" Foreground="#808080" FontWeight="Bold"/>
-                                    <TextBlock Text="{Binding CurrentGenre, FallbackValue='---'}" FontSize="13" Foreground="#E0E0E0" FontWeight="SemiBold" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding CurrentGenre}"/>
+                                    <TextBlock Text="GENRE" FontSize="11" Foreground="#808080" FontWeight="Bold"/>
+                                    <TextBlock Text="{Binding CurrentGenre, FallbackValue='---'}" FontSize="15" Foreground="#E0E0E0" FontWeight="SemiBold" Margin="0,4,0,0" TextWrapping="Wrap" ToolTip="{Binding CurrentGenre}"/>
                                 </StackPanel>
                             </Border>
 
                             <Border Background="#252525" CornerRadius="6" Padding="12" Margin="5">
                                 <StackPanel VerticalAlignment="Center">
-                                    <TextBlock Text="STYLE" FontSize="10" Foreground="#808080" FontWeight="Bold"/>
-                                    <TextBlock Text="{Binding CurrentStyle, FallbackValue='---'}" FontSize="13" Foreground="#E0E0E0" FontWeight="SemiBold" Margin="0,4,0,0" TextTrimming="CharacterEllipsis" ToolTip="{Binding CurrentStyle}"/>
+                                    <TextBlock Text="STYLE" FontSize="11" Foreground="#808080" FontWeight="Bold"/>
+                                    <TextBlock Text="{Binding CurrentStyle, FallbackValue='---'}" FontSize="15" Foreground="#E0E0E0" FontWeight="SemiBold" Margin="0,4,0,0" TextWrapping="Wrap" ToolTip="{Binding CurrentStyle}"/>
                                 </StackPanel>
                             </Border>
+
                         </UniformGrid>
                     </Border>
                 </Grid>

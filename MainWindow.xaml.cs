@@ -9,11 +9,13 @@ using System.IO;
 using System.Linq;
 using System.Net.Http;
 using System.Runtime.CompilerServices;
+using System.Security.Policy;
 using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
+using static System.Runtime.InteropServices.JavaScript.JSType;
 
 namespace Record_Inventory
 {
@@ -45,6 +47,8 @@ namespace Record_Inventory
         private string _suggestedAction = "AWAITING SCAN";
         private BitmapImage? _currentAlbumArt;
         private Visibility _placeholderVisibility = Visibility.Visible;
+
+        private bool _isProcessingScan = false;
 
         // Thread-Safe Public Properties Bindings
         public string CurrentArtist { get => _currentArtist; set { _currentArtist = value; OnPropertyChanged(); } }
@@ -161,29 +165,35 @@ namespace Record_Inventory
             catch { /* Fails silently if database configuration conflicts */ }
         }
 
-        private void BarcodeTextBox_KeyDown(object sender, KeyEventArgs e)
+        private async void BarcodeTextBox_KeyDown(object sender, KeyEventArgs e)
         {
             if (e.Key == Key.Enter)
             {
-                string input = BarcodeTextBox.Text.Trim();
-
-                BarcodeTextBox.Clear();
+                // Mark the event handled so WPF doesn't pass it down the pipeline
                 e.Handled = true;
 
-                if (!string.IsNullOrEmpty(input))
+                string input = BarcodeTextBox.Text.Trim();
+
+                // 1. Double-scan protection gate
+                if (_isProcessingScan || string.IsNullOrEmpty(input))
                 {
-                    if (input.Equals("NUKEDB", StringComparison.OrdinalIgnoreCase))
-                    {
-                        HandleDatabaseNuke();
-                    }
-                    else
-                    {
-                        // Completely non-blocking background threads execution
-                        Task.Run(async () =>
-                        {
-                            await ProcessBarcodeAsync(input);
-                        });
-                    }
+                    return;
+                }
+
+                try
+                {
+                    _isProcessingScan = true;
+
+                    // Clear the text box IMMEDIATELY so the gun's trailing signals hit nothing
+                    BarcodeTextBox.Text = string.Empty;
+
+                    // Run your lookup
+                    await ProcessBarcodeAsync(input);
+                }
+                finally
+                {
+                    // Reset the gate when completely done updating everything
+                    _isProcessingScan = false;
                 }
             }
         }
@@ -234,6 +244,7 @@ namespace Record_Inventory
                 try
                 {
                     using var connection = new SqliteConnection(ConnectionString);
+
                     var dbRecord = connection.QueryFirstOrDefault(
                         "SELECT * FROM Inventory WHERE Title = @Title AND Artist = @Artist ORDER BY ScanDate DESC",
                         new { Title = selectedAlbum.Title, Artist = selectedAlbum.Artist }
@@ -246,21 +257,53 @@ namespace Record_Inventory
                         CurrentYear = dbRecord.ReleaseYear?.ToString() ?? "---";
                         CurrentGenre = dbRecord.Genre?.ToString() ?? "---";
                         CurrentStyle = dbRecord.Style?.ToString() ?? "---";
+
                         CurrentRating = dbRecord.Rating != null ? Convert.ToDouble(dbRecord.Rating) : 0.0;
                         CurrentPrice = dbRecord.EstimatedPrice != null ? Convert.ToDouble(dbRecord.EstimatedPrice) : 0.00;
                         SuggestedAction = dbRecord.Decision?.ToString() ?? "AWAITING SCAN";
+
                         _currentActiveDatabaseId = Convert.ToInt64(dbRecord.Id);
 
-                        var searchData = await FetchFromDiscogsAsync(dbRecord.Barcode?.ToString() ?? "");
+                        // FIX: Pull directly from the dedicated image url data column row structure instead of Barcode
+                        string savedCoverUrl = "";
 
-                        BitmapImage? historicalArt = null;
-                        if (searchData != null && !string.IsNullOrEmpty(searchData.CoverImageUrl))
+                        // Safely extract the column value from the dynamic dapper mapping dictionary parameters
+                        var rowDict = dbRecord as IDictionary<string, object>;
+                        if (rowDict != null && rowDict.ContainsKey("CoverImageUrl") && rowDict["CoverImageUrl"] != null)
                         {
-                            historicalArt = await DownloadImageAsync(searchData.CoverImageUrl);
+                            savedCoverUrl = rowDict["CoverImageUrl"].ToString();
                         }
 
-                        CurrentAlbumArt = historicalArt;
-                        PlaceholderVisibility = historicalArt != null ? Visibility.Collapsed : Visibility.Visible;
+                        // If a real picture link is archived, download it right away and drop the text overlay
+                        if (!string.IsNullOrEmpty(savedCoverUrl) && (savedCoverUrl.StartsWith("http") || savedCoverUrl.Contains("discogs")))
+                        {
+                            CurrentAlbumArt = await DownloadImageAsync(savedCoverUrl);
+                            PlaceholderVisibility = System.Windows.Visibility.Collapsed;
+                        }
+                        else
+                        {
+                            // Fallback to re-query by barcode digit values if checking historical legacy gun scans
+                            string barcodeVal = dbRecord.Barcode?.ToString() ?? "";
+                            if (!string.IsNullOrEmpty(barcodeVal) && barcodeVal.Length >= 8 && barcodeVal.All(char.IsDigit))
+                            {
+                                var webQuery = await FetchFromDiscogsAsync(barcodeVal, false);
+                                if (webQuery != null && webQuery.Count > 0 && !string.IsNullOrEmpty(webQuery[0].CoverImageUrl))
+                                {
+                                    CurrentAlbumArt = await DownloadImageAsync(webQuery[0].CoverImageUrl);
+                                    PlaceholderVisibility = System.Windows.Visibility.Collapsed;
+                                }
+                                else
+                                {
+                                    CurrentAlbumArt = null;
+                                    PlaceholderVisibility = System.Windows.Visibility.Visible;
+                                }
+                            }
+                            else
+                            {
+                                CurrentAlbumArt = null;
+                                PlaceholderVisibility = System.Windows.Visibility.Visible;
+                            }
+                        }
                     }
                 }
                 catch
@@ -272,13 +315,13 @@ namespace Record_Inventory
                     CurrentGenre = "---";
                     CurrentStyle = "---";
                     CurrentAlbumArt = null;
-                    PlaceholderVisibility = Visibility.Visible;
+                    PlaceholderVisibility = System.Windows.Visibility.Visible;
                     _currentActiveDatabaseId = -1;
                 }
                 finally
                 {
+                    RefreshUI();
                     listView.SelectedIndex = -1;
-                    FocusInput();
                 }
             }
         }
@@ -329,8 +372,19 @@ namespace Record_Inventory
 
                 // Commit to database file automatically
                 string codeIdentifier = isTextSearch ? $"MANUAL_ID_{targetAlbum.Id}" : input;
-                _currentActiveDatabaseId = SaveToDatabase(codeIdentifier, CurrentArtist, CurrentTitle, CurrentYear, CurrentRating, CurrentPrice, SuggestedAction, CurrentGenre, CurrentStyle);
-
+                // Fixed 10-argument call passing targetAlbum.CoverImageUrl as the final parameter
+                _currentActiveDatabaseId = SaveToDatabase(
+                    input,
+                    CurrentArtist,
+                    CurrentTitle,
+                    CurrentYear,
+                    CurrentRating,
+                    CurrentPrice,
+                    SuggestedAction,
+                    CurrentGenre,
+                    CurrentStyle,
+                    targetAlbum.CoverImageUrl // <-- Added this 10th parameter to match the updated method signature
+                );
                 // Hand modification down smoothly via the dispatcher queue layout thread
                 Application.Current.Dispatcher.Invoke(() =>
                 {
@@ -357,13 +411,42 @@ namespace Record_Inventory
             }
         }
 
-        private long SaveToDatabase(string barcode, string artist, string title, string year, double rating, double price, string decision, string genre, string style)
+        private long SaveToDatabase(string barcode, string artist, string title, string year, double rating, double price, string decision, string genre, string style, string coverImageUrl)
         {
             using var connection = new SqliteConnection(ConnectionString);
+            connection.Open();
+
+            // 1. Structural Schema Guard: Safely inject our new column text block if missing
+            try
+            {
+                using var checkCmd = connection.CreateCommand();
+                checkCmd.CommandText = "PRAGMA table_info(Inventory);";
+                using var reader = checkCmd.ExecuteReader();
+                bool hasCoverColumn = false;
+                while (reader.Read())
+                {
+                    if (reader["name"].ToString().Equals("CoverImageUrl", StringComparison.OrdinalIgnoreCase))
+                    {
+                        hasCoverColumn = true;
+                        break;
+                    }
+                }
+                reader.Close();
+
+                if (!hasCoverColumn)
+                {
+                    using var alterCmd = connection.CreateCommand();
+                    alterCmd.CommandText = "ALTER TABLE Inventory ADD COLUMN CoverImageUrl TEXT;";
+                    alterCmd.ExecuteNonQuery();
+                }
+            }
+            catch { /* Column already structurally locked or handled */ }
+
+            // 2. Updated INSERT matrix targeting the specialized Image storage container column explicitly
             string insertSql = @"
-                INSERT INTO Inventory (Barcode, Artist, Title, ReleaseYear, Rating, EstimatedPrice, Decision, Genre, Style)
-                VALUES (@Barcode, @Artist, @Title, @ReleaseYear, @Rating, @EstimatedPrice, @Decision, @Genre, @Style);
-                SELECT last_insert_rowid();";
+            INSERT INTO Inventory (Barcode, Artist, Title, ReleaseYear, Rating, EstimatedPrice, Decision, Genre, Style, CoverImageUrl)
+            VALUES (@Barcode, @Artist, @Title, @ReleaseYear, @Rating, @EstimatedPrice, @Decision, @Genre, @Style, @CoverImageUrl);
+            SELECT last_insert_rowid();";
 
             return connection.ExecuteScalar<long>(insertSql, new
             {
@@ -375,7 +458,8 @@ namespace Record_Inventory
                 EstimatedPrice = price,
                 Decision = decision,
                 Genre = genre,
-                Style = style
+                Style = style,
+                CoverImageUrl = coverImageUrl // Safely maps the long url string without conflicts
             });
         }
 
@@ -683,17 +767,34 @@ namespace Record_Inventory
                 if (!string.IsNullOrEmpty(targetAlbum.CoverImageUrl))
                 {
                     CurrentAlbumArt = await DownloadImageAsync(targetAlbum.CoverImageUrl);
+
+                    // Explicitly HIDE the placeholder text when a new manual image is loaded successfully
+                    PlaceholderVisibility = System.Windows.Visibility.Collapsed;
                 }
                 else
                 {
                     CurrentAlbumArt = null;
+
+                    // Show placeholder if no image exists
+                    PlaceholderVisibility = System.Windows.Visibility.Visible;
                 }
 
-                // Generate a placeholder "Manual ID" since there's no barcode sequence text string
+                // Generate a placeholder "Manual ID" uniquely right here where it is used
                 string randomManualId = $"MANUAL_{DateTime.Now.Ticks}";
 
-                // Save straight to the SQLite file
-                _currentActiveDatabaseId = SaveToDatabase(randomManualId, CurrentArtist, CurrentTitle, CurrentYear, CurrentRating, CurrentPrice, SuggestedAction, CurrentGenre, CurrentStyle);
+                // Save straight to the SQLite file (Using our clean 10-argument setup)
+                _currentActiveDatabaseId = SaveToDatabase(
+                    randomManualId,
+                    CurrentArtist,
+                    CurrentTitle,
+                    CurrentYear,
+                    CurrentRating,
+                    CurrentPrice,
+                    SuggestedAction,
+                    CurrentGenre,
+                    CurrentStyle,
+                    targetAlbum.CoverImageUrl // Passes URL string parameter cleanly to the 10th slot
+                );
 
                 // Prepend seamlessly to your local Session Log sidebar
                 ScannedHistory.Insert(0, new AlbumRecord
